@@ -407,6 +407,7 @@ class FormulaAssetTests(unittest.TestCase):
                 self.assertNotIn("gastownhall/gascity", text)
                 self.assertNotIn("bugflow", text)
                 self.assertNotIn("Ralph", raw_text)
+                self.assertNotIn(".ralph", text)
 
     def test_report_formulas_are_targetless_and_report_only(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]

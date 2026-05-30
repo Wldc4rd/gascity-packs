@@ -29,10 +29,10 @@ needs = ["{target}.setup-design-review"]
 description_file = "../assets/workflows/github-issue-fix-design-review-work/{target}.review-loop.md"
 metadata = { "gc.run_target" = "gc.run-operator" }
 
-[template.ralph]
+[template.check]
 max_attempts = 8
 
-[template.ralph.check]
+[template.check.check]
 mode = "exec"
 path = ".gc/scripts/checks/design-review-approved.sh"
 timeout = "10m"
