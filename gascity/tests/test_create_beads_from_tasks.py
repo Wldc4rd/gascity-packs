@@ -373,6 +373,75 @@ class CreateBeadsFromTasksTests(unittest.TestCase):
             self.assertIn("status: partial", text)
             self.assertIn("| schema | bead | BACK-1 | Add schema |", text)
 
+    def test_resume_reuses_seeded_convoy_membership(self) -> None:
+        created_section = """
+## Created Beads
+
+| Key | Kind | Bead ID | Title |
+|---|---|---|---|
+| implementation | convoy | CONV-1 | Implement demo |
+| release | convoy | CONV-2 | Release docs |
+| schema | bead | BACK-1 | Add schema |
+| docs | bead | BACK-2 | Document workflow |
+| announce | bead | BACK-3 | Announce release |
+"""
+
+        def collect_convoy_adds(markdown: str) -> list[list[str]]:
+            seen: list[list[str]] = []
+
+            def fake_run(cmd, text=None, capture_output=None, check=None):
+                seen.append(cmd)
+                return fake_successful_gc(cmd, text=text, capture_output=capture_output, check=check)
+
+            with tempfile.TemporaryDirectory() as tmp:
+                path = pathlib.Path(tmp) / "tasks.md"
+                path.write_text(markdown, encoding="utf-8")
+
+                with mock.patch("subprocess.run", side_effect=fake_run):
+                    script.create_from_tasks(path, city=None, dry_run=False, force=False)
+
+            return [cmd for cmd in seen if cmd[:2] == ["gc", "convoy"] and "add" in cmd]
+
+        fresh_adds = collect_convoy_adds(sample_tasks())
+        resume_adds = collect_convoy_adds(sample_tasks().replace("status: approved", "status: partial") + created_section)
+
+        self.assertEqual(resume_adds, fresh_adds)
+        self.assertNotIn(["gc", "convoy", "--rig", "backend", "add", "CONV-1", "BACK-1"], resume_adds)
+
+    def test_resume_skips_existing_non_seed_convoy_membership(self) -> None:
+        created_section = """
+## Created Beads
+
+| Key | Kind | Bead ID | Title |
+|---|---|---|---|
+| implementation | convoy | CONV-1 | Implement demo |
+| release | convoy | CONV-2 | Release docs |
+| schema | bead | BACK-1 | Add schema |
+| docs | bead | BACK-2 | Document workflow |
+| announce | bead | BACK-3 | Announce release |
+"""
+        seen: list[list[str]] = []
+
+        def fake_run(cmd, text=None, capture_output=None, check=None):
+            seen.append(cmd)
+            joined = " ".join(cmd)
+            if " dep list CONV-1 " in f" {joined} " and "--type tracks" in joined:
+                return subprocess_result('[{"id":"BACK-2","dependency_type":"tracks"}]')
+            return fake_successful_gc(cmd, text=text, capture_output=capture_output, check=check)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "tasks.md"
+            path.write_text(
+                sample_tasks().replace("status: approved", "status: partial") + created_section,
+                encoding="utf-8",
+            )
+
+            with mock.patch("subprocess.run", side_effect=fake_run):
+                script.create_from_tasks(path, city=None, dry_run=False, force=False)
+
+        add_commands = [cmd for cmd in seen if cmd[:2] == ["gc", "convoy"] and "add" in cmd]
+        self.assertNotIn(["gc", "convoy", "--rig", "backend", "add", "CONV-1", "BACK-2"], add_commands)
+
 
 def subprocess_result(stdout: str, returncode: int = 0, stderr: str = ""):
     return mock.Mock(returncode=returncode, stdout=stdout, stderr=stderr)

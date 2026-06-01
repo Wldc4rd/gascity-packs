@@ -19,6 +19,7 @@ except ImportError:  # pragma: no cover
 
 FRONT_MATTER_RE = re.compile(r"\A---\n(?P<body>.*?)\n---(?:\n|\Z)", re.DOTALL)
 BODY_HASH_RE = re.compile(r"\Asha256:[0-9a-f]{64}\Z")
+UNSAFE_MARKER_RE = re.compile(r"<!--|--!?>|[\r\n]")
 VALID_TRIAGE_VERDICTS = {
     "reproduced",
     "not_reproduced",
@@ -41,6 +42,10 @@ VALID_ACTIONS_BY_VERDICT = {
 
 class ValidationError(Exception):
     pass
+
+
+YAML_ERROR_TYPES = (yaml.YAMLError,) if yaml is not None else ()
+CLI_ERROR_TYPES = (OSError, UnicodeDecodeError, ValidationError, validate_verdict_report.ValidationError) + YAML_ERROR_TYPES
 
 
 @dataclass(frozen=True)
@@ -143,6 +148,8 @@ def render_pr_review_comment(
     report = validate_verdict_report.validate_report_text(report_path.read_text(encoding="utf-8"), expected_kind="review")
     if outcome != review_outcome(report.verdict, report.severity):
         raise ValidationError(f"outcome {outcome!r} does not match review report {report.verdict}/{report.severity}")
+    head_sha = marker_value("head_sha", head_sha)
+    artifact = public_line("artifact_ref", artifact_ref or str(report_path))
     gate_text = "human approved" if human_approved else "not human approved"
     return (
         f"<!-- gc:github-pr-review head_sha={head_sha} outcome={outcome} -->\n"
@@ -150,7 +157,7 @@ def render_pr_review_comment(
         f"- outcome: {outcome}\n"
         f"- report: {report.verdict}/{report.severity}\n"
         f"- gate: {gate_text}\n"
-        f"- artifact: {artifact_ref or str(report_path)}\n"
+        f"- artifact: {artifact}\n"
     )
 
 
@@ -161,9 +168,10 @@ def render_triage_comment(
     human_approved: bool = False,
 ) -> str:
     report = validate_triage_report_text(report_path.read_text(encoding="utf-8"))
+    repo = marker_value("repo", report.repo, allow_empty=False)
     gate_text = "human approved" if human_approved else "not human approved"
     lines = [
-        f"<!-- gc:github-issue-triage repo={report.repo} issue={report.issue_number} body_hash={report.body_hash} -->",
+        f"<!-- gc:github-issue-triage repo={repo} issue={report.issue_number} body_hash={report.body_hash} -->",
         "## GC Issue Triage",
         "",
         f"- verdict: {report.verdict}",
@@ -173,9 +181,14 @@ def render_triage_comment(
         f"- gate: {gate_text}",
     ]
     if artifact_ref:
-        lines.append(f"- artifact: {artifact_ref}")
-    if report.verdict == "security_sensitive" and not human_approved:
-        lines.append("- note: security-sensitive details require human approval before public posting")
+        lines.append(f"- artifact: {public_line('artifact_ref', artifact_ref)}")
+    approval_notes = []
+    if report.verdict == "security_sensitive":
+        approval_notes.append("security-sensitive details require human approval before public posting")
+    if report.priority == "p0":
+        approval_notes.append("p0 details require human approval before public posting")
+    if approval_notes and not human_approved:
+        lines.append(f"- note: {'; '.join(approval_notes)}")
     elif report.analysis_body:
         lines.extend(["", "## Analysis", "", demote_markdown_headings(report.analysis_body)])
     return "\n".join(lines) + "\n"
@@ -189,10 +202,9 @@ def render_issue_fix_status(
     pr_url: str = "",
     artifact_ref: str = "",
 ) -> str:
-    if not state.strip():
-        raise ValidationError("state must not be empty")
-    if not summary.strip():
-        raise ValidationError("summary must not be empty")
+    state = marker_value("state", state, allow_empty=False)
+    run_id = marker_value("run_id", run_id)
+    summary = public_line("summary", summary)
     lines = [
         f"<!-- gc:github-issue-fix-status run_id={run_id} state={state} -->",
         "## GC Issue Fix",
@@ -201,9 +213,9 @@ def render_issue_fix_status(
         f"- summary: {summary.strip()}",
     ]
     if pr_url:
-        lines.append(f"- pr: {pr_url}")
+        lines.append(f"- pr: {public_line('pr_url', pr_url)}")
     if artifact_ref:
-        lines.append(f"- artifact: {artifact_ref}")
+        lines.append(f"- artifact: {public_line('artifact_ref', artifact_ref)}")
     return "\n".join(lines) + "\n"
 
 
@@ -230,13 +242,41 @@ def required_int(data: dict[str, Any], key: str) -> int:
     raise ValidationError(f"{key} must be an integer")
 
 
+def marker_value(name: str, value: str, *, allow_empty: bool = True) -> str:
+    value = value.strip()
+    if not value:
+        if allow_empty:
+            return ""
+        raise ValidationError(f"{name} must not be empty")
+    if UNSAFE_MARKER_RE.search(value):
+        raise ValidationError(f"{name} contains unsafe marker text")
+    return value
+
+
+def public_line(name: str, value: str) -> str:
+    value = value.strip()
+    if not value:
+        raise ValidationError(f"{name} must not be empty")
+    if UNSAFE_MARKER_RE.search(value):
+        raise ValidationError(f"{name} contains unsafe public text")
+    return value
+
+
 def demote_markdown_headings(text: str) -> str:
     lines: list[str] = []
     for line in text.strip().splitlines():
-        if re.match(r"^#{1,5}\s", line):
-            lines.append("#" + line)
+        safe_line = line.replace("<!--", "&lt;!--").replace("-->", "--&gt;")
+        hash_heading = re.match(r"^( {0,3})(#{1,5}\s.*)$", safe_line)
+        max_hash_heading = re.match(r"^( {0,3})(#{6,}\s.*)$", safe_line)
+        setext_underline = re.match(r"^( {0,3})(=+|-+)\s*$", safe_line)
+        if hash_heading:
+            lines.append(f"{hash_heading.group(1)}#{hash_heading.group(2)}")
+        elif max_hash_heading:
+            lines.append(f"{max_hash_heading.group(1)}\\{max_hash_heading.group(2)}")
+        elif setext_underline:
+            lines.append(f"{setext_underline.group(1)}\\{setext_underline.group(2)}")
         else:
-            lines.append(line)
+            lines.append(safe_line)
     return "\n".join(lines).strip()
 
 
@@ -328,7 +368,7 @@ def main(argv: list[str] | None = None) -> int:
             output = {"ok": True, "output": str(args.output)}
         else:  # pragma: no cover
             raise ValidationError(f"unsupported command {args.command}")
-    except (OSError, ValidationError, validate_verdict_report.ValidationError) as exc:
+    except CLI_ERROR_TYPES as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     print(json.dumps(output, sort_keys=True))

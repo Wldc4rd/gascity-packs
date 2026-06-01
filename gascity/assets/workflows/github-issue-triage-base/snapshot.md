@@ -48,9 +48,9 @@ stable index, and artifact files hold large payloads.
 - Read the current step bead with `bd show <current-step-bead-id> --json` and
   take `gc.root_bead_id`; hard-fail if it is missing.
 - Resolve the current triage directory with
-  `{{pack_root}}/assets/scripts/artifacts.py path --override "{{artifact_root}}" --relative "/github/issues/<owner>/<repo>/<number>/triage/<body-hash>/" --directory`.
+  `{{pack_root}}/assets/scripts/artifacts.py path --override "{{artifact_root}}" --relative "/github/issues/<owner>/<repo>/<number>/triage/<body-hash>/" --directory --mkdir-parents`.
 - Update the workflow root metadata with:
-  `bd update <root-bead-id> --set-metadata gc.github.source_bead_id=<source-bead-id> --set-metadata gc.github.kind=issue --set-metadata gc.github.repo=<owner>/<repo> --set-metadata gc.github.number=<number> --set-metadata gc.github.url=<canonical_url> --set-metadata gc.github.body_hash=<body_hash> --set-metadata gc.github.snapshot_path=<absolute source.json path> --set-metadata gc.github.triage_dir=<absolute triage directory> --set-metadata gc.github.artifact_root=<absolute artifact root> --set-metadata gc.github.post_mode={{post_mode}}`.
+  `bd update <root-bead-id> --set-metadata gc.github.source_bead_id=<source-bead-id> --set-metadata gc.github.kind=issue --set-metadata gc.github.repo=<owner>/<repo> --set-metadata gc.github.number=<number> --set-metadata gc.github.url=<canonical_url> --set-metadata gc.github.body_hash=<body_hash> --set-metadata gc.github.snapshot_path=<absolute source.json path> --set-metadata gc.github.triage_dir=<absolute triage directory> --set-metadata gc.github.artifact_root=<absolute artifact root> --set-metadata gc.github.post_mode={{post_mode}} --set-metadata gc.github.reused_current_output=false`.
 
 Do not use title, label, assignee, or state changes to invalidate triage; only
 `gc.github.body_hash` controls body-hash-keyed triage reuse.

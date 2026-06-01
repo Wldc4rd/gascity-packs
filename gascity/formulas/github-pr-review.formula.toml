@@ -71,7 +71,6 @@ description_file = "../assets/workflows/github-pr-review/render-comment.md"
 id = "human-gate-comment"
 title = "Gate PR review comment"
 needs = ["render-comment"]
-condition = "{{post_mode}} == human_gate"
 metadata = { "gc.run_target" = "gc.run-operator" }
 description_file = "../assets/workflows/github-pr-review/human-gate-comment.md"
 

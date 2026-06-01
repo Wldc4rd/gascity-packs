@@ -547,11 +547,13 @@ def create_runnable(runner: Runner, item: Runnable, mappings: dict[str, str]) ->
 
 
 def create_convoy(runner: Runner, convoy: Convoy, mappings: dict[str, str]) -> str:
+    member_keys = [*convoy.convoy_keys, *convoy.bead_keys]
     if convoy.key in mappings:
         runner.run_bd(["show", mappings[convoy.key], "--json"])
+        if member_keys:
+            runner.seeded_convoy_members[convoy.key] = member_keys[0]
         update_convoy_metadata(runner, convoy, mappings[convoy.key])
         return mappings[convoy.key]
-    member_keys = [*convoy.convoy_keys, *convoy.bead_keys]
     if not member_keys:
         raise PlanError(f"{convoy.key}: convoy must contain at least one bead or nested convoy")
     args = ["create", "--json"]
@@ -583,10 +585,40 @@ def link_memberships(runner: Runner, plan: Plan, mappings: dict[str, str]) -> No
     for convoy in plan.convoys:
         convoy_id = mappings[convoy.key]
         seeded_key = runner.seeded_convoy_members.get(convoy.key)
+        existing_member_ids = existing_convoy_members(runner, convoy_id)
         for key in [*convoy.convoy_keys, *convoy.bead_keys]:
             if key == seeded_key:
                 continue
-            runner.run_convoy(["add", convoy_id, mappings[key]])
+            member_id = mappings[key]
+            if member_id in existing_member_ids:
+                continue
+            runner.run_convoy(["add", convoy_id, member_id])
+            existing_member_ids.add(member_id)
+
+
+def existing_convoy_members(runner: Runner, convoy_id: str) -> set[str]:
+    if runner.dry_run:
+        return set()
+    output = runner.run_bd(["dep", "list", convoy_id, "--type", "tracks", "--json"])
+    try:
+        deps = json.loads(output)
+    except json.JSONDecodeError:
+        return set()
+    if not isinstance(deps, list):
+        return set()
+    member_ids: set[str] = set()
+    for dep in deps:
+        if not isinstance(dep, dict):
+            continue
+        dep_type = str(dep.get("type") or dep.get("dependency_type") or "").strip()
+        if dep_type and dep_type != "tracks":
+            continue
+        dep_id = str(dep.get("depends_on_id") or "").strip()
+        if not dep_id:
+            dep_id = str(dep.get("target_id") or dep.get("to_id") or dep.get("issue_id") or dep.get("id") or "").strip()
+        if dep_id:
+            member_ids.add(dep_id)
+    return member_ids
 
 
 def dependency_exists(runner: Runner, issue_id: str, depends_on_id: str) -> bool:

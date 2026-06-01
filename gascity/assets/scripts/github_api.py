@@ -207,7 +207,7 @@ def pr_search(repo_slug: str, marker: str, *, author: str = "") -> dict[str, Any
     query = f'repo:{repo_slug} type:pr is:open "{marker}"'
     if author:
         query += f" author:{author}"
-    data = require_object(gh_api([f"search/issues?q={quote(query, safe=': /\"')}"]))
+    data = require_object(gh_api([f"search/issues?q={quote(query, safe=': /')}"]))
     items = data.get("items", [])
     if not isinstance(items, list):
         raise GitHubAPIError("search response items must be a list")

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import io
 import json
 import pathlib
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "assets" / "scripts"))
@@ -183,6 +185,38 @@ class GitHubAPITests(unittest.TestCase):
                 ],
             )
             self.assertEqual(updated["url"], "https://github.com/owner/repo/pull/12")
+
+    def test_gh_api_surfaces_nonzero_exit_stderr(self) -> None:
+        with mock.patch("github_api.subprocess.run", return_value=subprocess_result("", stderr="missing auth", returncode=1)):
+            with self.assertRaisesRegex(github_api.GitHubAPIError, "missing auth"):
+                github_api.gh_api(["user"])
+
+    def test_gh_api_rejects_malformed_and_non_container_json(self) -> None:
+        with mock.patch("github_api.subprocess.run", return_value=subprocess_result("not-json")):
+            with self.assertRaisesRegex(github_api.GitHubAPIError, "invalid JSON"):
+                github_api.gh_api(["user"])
+
+        with mock.patch("github_api.subprocess.run", return_value=subprocess_result('"scalar"')):
+            with self.assertRaisesRegex(github_api.GitHubAPIError, "not an object or list"):
+                github_api.gh_api(["user"])
+
+    def test_pr_search_encodes_marker_quotes(self) -> None:
+        with mock.patch("github_api.subprocess.run", return_value=subprocess_result('{"items":[]}')) as run:
+            result = github_api.pr_search("owner/repo", 'gc:review" is:closed', author="octocat")
+
+        self.assertEqual(result["items"], [])
+        request = run.call_args.args[0][-1]
+        self.assertNotIn('"', request)
+        self.assertIn("%22gc:review%22 is:closed%22", request)
+
+    def test_main_prints_error_line_on_invalid_input(self) -> None:
+        stderr = io.StringIO()
+
+        with redirect_stderr(stderr), redirect_stdout(io.StringIO()):
+            code = github_api.main(["parse-url", "owner/repo#123"])
+
+        self.assertEqual(code, 1)
+        self.assertIn("error:", stderr.getvalue())
 
 
 if __name__ == "__main__":

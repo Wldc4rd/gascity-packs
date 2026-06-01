@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import os
 import pathlib
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 
 
 SCRIPT_PATH = pathlib.Path(__file__).resolve().parents[1] / "assets" / "scripts" / "artifacts.py"
@@ -71,6 +73,83 @@ class ArtifactHelperTests(unittest.TestCase):
                 module.resolve_artifact_root("", rig_root=str(rig_root)),
                 plans.resolve(),
             )
+
+    def test_existing_github_artifacts_mark_plans_directory_as_owned(self) -> None:
+        module = load_artifacts_module()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            rig_root = pathlib.Path(temp_dir)
+            (rig_root / "plans" / "github").mkdir(parents=True)
+
+            self.assertEqual(
+                module.resolve_artifact_root("", rig_root=str(rig_root)),
+                (rig_root / "plans").resolve(),
+            )
+
+    def test_cli_mkdir_marks_default_plans_root_owned(self) -> None:
+        module = load_artifacts_module()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            rig_root = pathlib.Path(temp_dir)
+            stdout = io.StringIO()
+
+            with redirect_stdout(stdout):
+                code = module.main(
+                    [
+                        "path",
+                        "--override",
+                        "",
+                        "--rig-root",
+                        str(rig_root),
+                        "--relative",
+                        "/github/issues/owner/repo/1/source.json",
+                        "--mkdir-parents",
+                    ]
+                )
+
+            self.assertEqual(code, 0)
+            self.assertTrue((rig_root / "plans" / ".gc-plans").exists())
+            self.assertEqual(
+                module.resolve_artifact_root("", rig_root=str(rig_root)),
+                (rig_root / "plans").resolve(),
+            )
+            self.assertIn("/plans/github/issues/owner/repo/1/source.json", stdout.getvalue())
+
+    def test_cli_root_and_directory_branches(self) -> None:
+        module = load_artifacts_module()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            rig_root = pathlib.Path(temp_dir)
+
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(module.main(["root", "--rig-root", str(rig_root), "--mkdir"]), 0)
+            self.assertTrue((rig_root / "plans" / ".gc-plans").exists())
+
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(
+                    module.main(
+                        [
+                            "path",
+                            "--rig-root",
+                            str(rig_root),
+                            "--relative",
+                            "/github/pulls/owner/repo/2/reviews/abc/",
+                            "--directory",
+                            "--mkdir-parents",
+                        ]
+                    ),
+                    0,
+                )
+            self.assertTrue((rig_root / "plans" / "github" / "pulls" / "owner" / "repo" / "2" / "reviews" / "abc").is_dir())
+
+    def test_cli_errors_return_one(self) -> None:
+        module = load_artifacts_module()
+        stderr = io.StringIO()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            args = ["path", "--override", temp_dir, "--relative", "../outside"]
+
+            with redirect_stderr(stderr), redirect_stdout(io.StringIO()):
+                code = module.main(args)
+
+        self.assertEqual(code, 1)
+        self.assertIn("error:", stderr.getvalue())
 
     def test_leading_slash_paths_are_artifact_root_relative(self) -> None:
         module = load_artifacts_module()

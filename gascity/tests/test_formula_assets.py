@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import tempfile
 import tomllib
 import unittest
 
@@ -56,6 +57,14 @@ def load_formula(root: pathlib.Path, name: str) -> dict:
     return tomllib.loads((root / "formulas" / f"{name}.formula.toml").read_text(encoding="utf-8"))
 
 
+def load_formula_from_dirs(formula_dirs: list[pathlib.Path], name: str) -> dict:
+    for formula_dir in reversed(formula_dirs):
+        path = formula_dir / f"{name}.formula.toml"
+        if path.exists():
+            return tomllib.loads(path.read_text(encoding="utf-8"))
+    raise AssertionError(f"formula {name!r} not found in layered dirs")
+
+
 def merged_steps(parent_steps: list[dict], child_steps: list[dict]) -> list[dict]:
     result = list(parent_steps)
     positions = {step["id"]: idx for idx, step in enumerate(result)}
@@ -88,6 +97,39 @@ def resolve_formula(root: pathlib.Path, name: str, seen: tuple[str, ...] = ()) -
     }
     for parent in parents:
         parent_data = resolve_formula(root, parent, (*seen, name))
+        if not merged["contract"]:
+            merged["contract"] = parent_data.get("contract", "")
+        if merged["target_required"] is None:
+            merged["target_required"] = parent_data.get("target_required")
+        merged["vars"].update(parent_data.get("vars", {}))
+        merged["steps"].extend(parent_data.get("steps", []))
+
+    merged["vars"].update(data.get("vars", {}))
+    merged["steps"] = merged_steps(merged["steps"], data.get("steps", []))
+    if data.get("description"):
+        merged["description"] = data["description"]
+    return merged
+
+
+def resolve_formula_from_dirs(formula_dirs: list[pathlib.Path], name: str, seen: tuple[str, ...] = ()) -> dict:
+    if name in seen:
+        raise AssertionError(f"circular formula extends: {' -> '.join((*seen, name))}")
+    data = load_formula_from_dirs(formula_dirs, name)
+    parents = data.get("extends", [])
+    if not parents:
+        return data
+
+    merged: dict = {
+        "formula": data["formula"],
+        "description": data.get("description", ""),
+        "version": data.get("version", 1),
+        "contract": data.get("contract", ""),
+        "target_required": data.get("target_required"),
+        "vars": {},
+        "steps": [],
+    }
+    for parent in parents:
+        parent_data = resolve_formula_from_dirs(formula_dirs, parent, (*seen, name))
         if not merged["contract"]:
             merged["contract"] = parent_data.get("contract", "")
         if merged["target_required"] is None:
@@ -243,7 +285,10 @@ class FormulaAssetTests(unittest.TestCase):
         self.assertNotIn("worker_target", data["vars"])
 
         step_ids = [step["id"] for step in data["steps"]]
-        self.assertEqual(step_ids, ["prepare", "drain-separate", "drain-same-session", "wait-for-drain", "summarize"])
+        self.assertEqual(
+            step_ids,
+            ["prepare", "drain-separate", "drain-same-session", "wait-for-drain", "summarize", "publish"],
+        )
 
         separate = data["steps"][1]
         same = data["steps"][2]
@@ -262,6 +307,10 @@ class FormulaAssetTests(unittest.TestCase):
         self.assertEqual(same["drain"]["on_item_failure"], "skip_remaining")
         self.assertEqual(data["steps"][3]["metadata"]["gc.run_target"], "gc.run-operator")
         self.assertEqual(data["steps"][4]["metadata"]["gc.run_target"], "gc.run-operator")
+        self.assertEqual(data["steps"][5]["metadata"]["gc.run_target"], "gc.publisher")
+        self.assertEqual(data["steps"][5]["needs"], ["summarize"])
+        summarize = node_description(root, data["steps"][4])
+        self.assertIn("gc.implementation.summary_path", summarize)
         wait = node_description(root, data["steps"][3])
         for fragment in (
             "Wait only on the core drain control bead",
@@ -273,6 +322,15 @@ class FormulaAssetTests(unittest.TestCase):
         ):
             with self.subTest(step="wait-for-drain", fragment=fragment):
                 self.assertIn(fragment, wait)
+        publish = node_description(root, data["steps"][5])
+        for fragment in (
+            "push {{push}}",
+            "open_pr {{open_pr}}",
+            "summary_path {{summary_path}}",
+            "publish",
+        ):
+            with self.subTest(step="publish", fragment=fragment):
+                self.assertIn(fragment, publish)
 
         helper = tomllib.loads((root / "formulas" / "same-session-implement.formula.toml").read_text(encoding="utf-8"))
         self.assertEqual(helper["steps"][0]["drain"]["member_access"], "exclusive")
@@ -474,6 +532,53 @@ class FormulaAssetTests(unittest.TestCase):
                 self.assertIn("not filesystem-root absolute", text)
                 self.assertIn("gc.github.snapshot_path=<absolute source.json path>", text)
 
+    def test_github_pr_review_delegates_with_explicit_review_artifacts(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        data = resolve_formula(root, "github-pr-review")
+        text = effective_formula_text(root, "github-pr-review")
+        reuse_current = node_description(root, next(step for step in data["steps"] if step["id"] == "reuse-current-head"))
+        run_review = node_description(root, next(step for step in data["steps"] if step["id"] == "run-review"))
+        render_comment = node_description(root, next(step for step in data["steps"] if step["id"] == "render-comment"))
+
+        for fragment in (
+            "gc.github.review_dir=<absolute review directory>",
+            "gc.github.review_subject_path",
+            "gc.github.review_report_path",
+            "gc.github.comment_path",
+            "gc.github.review_outcome",
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, text)
+        for fragment in (
+            "gc.github.reused_current_output=true",
+            "gc.github.reused_current_output=false",
+            "gc.github.review_report_path",
+            "gc.github.comment_path",
+        ):
+            with self.subTest(step="reuse-current-head", fragment=fragment):
+                self.assertIn(fragment, reuse_current)
+        for fragment in (
+            "SUBJECT_PATH=<gc.github.review_dir>/subject.md",
+            "REPORT_PATH=<gc.github.review_dir>/review-report.md",
+            "gc sling gc.run-operator review --formula",
+            "--var subject_path=\"$SUBJECT_PATH\"",
+            "--var report_path=\"$REPORT_PATH\"",
+            "review-outcome \"$REPORT_PATH\"",
+            "gc.github.reused_current_output=true",
+            "do not\nlaunch the generic `review` formula",
+            "leave the reused\nartifacts untouched",
+        ):
+            with self.subTest(step="run-review", fragment=fragment):
+                self.assertIn(fragment, run_review)
+        for fragment in (
+            "<gc.github.review_dir>/comment.md",
+            "gc.github.reused_current_output=true",
+            "do not\nrewrite the rendered comment",
+            "real no-op path",
+        ):
+            with self.subTest(step="render-comment", fragment=fragment):
+                self.assertIn(fragment, render_comment)
+
     def test_github_issue_fix_uses_implementation_plan_artifact_contract(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]
         text = effective_formula_text(root, "github-issue-fix")
@@ -481,8 +586,114 @@ class FormulaAssetTests(unittest.TestCase):
         self.assertIn("implementation-plan.md", text)
         self.assertIn("implementation_plan_file", text)
         self.assertIn("create beads", text.lower())
-        self.assertNotIn("design.md", text)
         self.assertNotIn("design_file", text)
+
+    def test_github_issue_fix_producers_publish_plan_artifact_metadata(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        data = resolve_formula(root, "github-issue-fix")
+        steps = {step["id"]: step for step in data["steps"]}
+
+        requirements = node_description(root, steps["generate-requirements"])
+        implementation_plan = node_description(root, steps["implementation-plan"])
+
+        for fragment in (
+            "bd update <root-bead-id>",
+            "gc.github.requirements_path",
+            "absolute path",
+        ):
+            with self.subTest(step="generate-requirements", fragment=fragment):
+                self.assertIn(fragment, requirements)
+        for fragment in (
+            "bd update <root-bead-id>",
+            "gc.github.implementation_plan_path",
+            "absolute path",
+        ):
+            with self.subTest(step="implementation-plan", fragment=fragment):
+                self.assertIn(fragment, implementation_plan)
+
+    def test_github_issue_fix_preserves_layered_design_dependency_compatibility(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        data = resolve_formula(root, "github-issue-fix")
+        steps = {step["id"]: step for step in data["steps"]}
+        step_ids = [step["id"] for step in data["steps"]]
+
+        self.assertLess(step_ids.index("implementation-plan"), step_ids.index("design"))
+        self.assertLess(step_ids.index("design"), step_ids.index("design-review"))
+        self.assertEqual(steps["design"]["needs"], ["implementation-plan"])
+        self.assertEqual(steps["design-review"]["needs"], ["design"])
+
+        design = node_description(root, steps["design"])
+        self.assertIn("compatibility alias", design)
+        self.assertIn("implementation-plan.md", design)
+        self.assertIn("gc.github.implementation_plan_path", design)
+        self.assertIn("Do not create `design.md`", design)
+
+    def test_layered_github_issue_overrides_preserve_catalog_and_resolve(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp:
+            override_dir = pathlib.Path(tmp)
+            (override_dir / "github-issue-fix.formula.toml").write_text(
+                """
+formula = "github-issue-fix"
+extends = ["github-issue-fix-base"]
+version = 1
+contract = "graph.v2"
+target_required = false
+
+[catalog]
+name = "github-issue-fix"
+description = "Fix a GitHub issue with a local advanced design-review override."
+
+[[steps]]
+id = "design-review"
+title = "Run local advanced design review"
+needs = ["design"]
+metadata = { "gc.run_target" = "gc.review-synthesizer" }
+description = "Override sink that preserves the base issue-fix protocol."
+""".lstrip(),
+                encoding="utf-8",
+            )
+            (override_dir / "github-issue-triage.formula.toml").write_text(
+                """
+formula = "github-issue-triage"
+extends = ["github-issue-triage-base"]
+version = 1
+contract = "graph.v2"
+target_required = false
+
+[catalog]
+name = "github-issue-triage"
+description = "Triage a GitHub issue with a local triage-work override."
+
+[[steps]]
+id = "write-triage-report"
+title = "Run local issue triage"
+needs = ["reuse-current-body-hash"]
+metadata = { "gc.run_target" = "gc.issue-triager" }
+description = "Override sink that writes the base triage report contract."
+""".lstrip(),
+                encoding="utf-8",
+            )
+
+            layered_dirs = [root / "formulas", override_dir]
+            issue_fix = resolve_formula_from_dirs(layered_dirs, "github-issue-fix")
+            issue_triage = resolve_formula_from_dirs(layered_dirs, "github-issue-triage")
+
+            self.assertEqual(load_formula_from_dirs(layered_dirs, "github-issue-fix")["catalog"]["name"], "github-issue-fix")
+            self.assertEqual(
+                load_formula_from_dirs(layered_dirs, "github-issue-triage")["catalog"]["name"],
+                "github-issue-triage",
+            )
+            self.assertEqual(
+                next(step for step in issue_fix["steps"] if step["id"] == "design-review")["needs"],
+                ["design"],
+            )
+            for data in (issue_fix, issue_triage):
+                step_ids = {step["id"] for step in data["steps"]}
+                for step in data["steps"]:
+                    for need in step.get("needs", []):
+                        with self.subTest(formula=data["formula"], step=step["id"], need=need):
+                            self.assertIn(need, step_ids)
 
     def test_github_issue_triage_formula_requires_human_readable_analysis(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]
@@ -512,6 +723,46 @@ class FormulaAssetTests(unittest.TestCase):
                 self.assertIn(fragment, text)
         self.assertNotIn("triage-context.json", text)
 
+    def test_github_issue_triage_reuse_path_noops_downstream_steps(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        data = resolve_formula(root, "github-issue-triage")
+        reuse_current = node_description(root, next(step for step in data["steps"] if step["id"] == "reuse-current-body-hash"))
+        write_report = node_description(root, next(step for step in data["steps"] if step["id"] == "write-triage-report"))
+        render_comment = node_description(root, next(step for step in data["steps"] if step["id"] == "render-comment"))
+
+        for fragment in (
+            "gc.github.reused_current_output=true",
+            "gc.github.reused_current_output=false",
+            "gc.github.triage_report_path",
+            "gc.github.comment_path",
+        ):
+            with self.subTest(step="reuse-current-body-hash", fragment=fragment):
+                self.assertIn(fragment, reuse_current)
+        for fragment in (
+            "gc.github.reused_current_output=true",
+            "do not\n  investigate or rewrite `triage-report.md`",
+            "leave the reused artifacts\n  untouched",
+        ):
+            with self.subTest(step="write-triage-report", fragment=fragment):
+                self.assertIn(fragment, write_report)
+        for fragment in (
+            "gc.github.reused_current_output=true",
+            "do not rewrite the rendered comment",
+            "real no-op path",
+        ):
+            with self.subTest(step="render-comment", fragment=fragment):
+                self.assertIn(fragment, render_comment)
+
+    def test_github_issue_triage_snapshot_creates_triage_directory(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        data = resolve_formula(root, "github-issue-triage")
+        snapshot = node_description(root, next(step for step in data["steps"] if step["id"] == "snapshot"))
+
+        self.assertIn(
+            '--relative "/github/issues/<owner>/<repo>/<number>/triage/<body-hash>/" --directory --mkdir-parents',
+            snapshot,
+        )
+
     def test_github_issue_triage_supports_rubric_override_without_protocol_override(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]
         data = resolve_formula(root, "github-issue-triage")
@@ -533,6 +784,41 @@ class FormulaAssetTests(unittest.TestCase):
         self.assertNotIn("condition", gate)
         self.assertIn("gc.github.triage_priority", node_description(root, gate))
         self.assertIn("no-op gate", node_description(root, gate))
+        self.assertIn("gc.github.public_comment_gate", node_description(root, gate))
+
+    def test_github_public_comment_post_steps_enforce_gate_contract(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        pr_review = resolve_formula(root, "github-pr-review")
+        issue_triage = resolve_formula(root, "github-issue-triage")
+
+        pr_gate = next(step for step in pr_review["steps"] if step["id"] == "human-gate-comment")
+        self.assertNotIn("condition", pr_gate)
+
+        checks = (
+            ("github-pr-review gate", node_description(root, pr_gate)),
+            (
+                "github-pr-review post",
+                node_description(root, next(step for step in pr_review["steps"] if step["id"] == "post-comment")),
+            ),
+            (
+                "github-issue-triage gate",
+                node_description(root, next(step for step in issue_triage["steps"] if step["id"] == "human-gate-sensitive-output")),
+            ),
+            (
+                "github-issue-triage post",
+                node_description(root, next(step for step in issue_triage["steps"] if step["id"] == "post-comment")),
+            ),
+        )
+        for label, text in checks:
+            for fragment in (
+                "gc.github.public_comment_gate",
+                "approved",
+                "not_required",
+                "rejected",
+                "revision_requested",
+            ):
+                with self.subTest(label=label, fragment=fragment):
+                    self.assertIn(fragment, text)
 
     def test_all_declared_formula_vars_are_rendered_into_graph_text(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]

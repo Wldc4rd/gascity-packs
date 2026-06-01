@@ -91,3 +91,10 @@ title = "Write implementation summary"
 needs = ["wait-for-drain"]
 metadata = { "gc.run_target" = "gc.run-operator" }
 description_file = "../assets/workflows/implement/summarize.md"
+
+[[steps]]
+id = "publish"
+title = "Optionally publish direct implementation"
+needs = ["summarize"]
+metadata = { "gc.run_target" = "gc.publisher" }
+description_file = "../assets/workflows/implement/publish.md"

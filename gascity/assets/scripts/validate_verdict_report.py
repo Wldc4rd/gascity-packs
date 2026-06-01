@@ -27,6 +27,10 @@ class ValidationError(Exception):
     pass
 
 
+YAML_ERROR_TYPES = (yaml.YAMLError,) if yaml is not None else ()
+CLI_ERROR_TYPES = (OSError, UnicodeDecodeError, ValidationError) + YAML_ERROR_TYPES
+
+
 @dataclass(frozen=True)
 class VerdictReport:
     schema: str
@@ -90,10 +94,14 @@ def required_string(data: dict[str, Any], key: str) -> str:
 def validate_finding(raw: Any, index: int) -> str:
     if not isinstance(raw, dict):
         raise ValidationError(f"findings[{index}] must be a mapping")
-    missing = [field for field in sorted(REQUIRED_FINDING_FIELDS) if not str(raw.get(field, "")).strip()]
+    missing = []
+    for field in sorted(REQUIRED_FINDING_FIELDS):
+        value = raw.get(field)
+        if not isinstance(value, str) or not value.strip():
+            missing.append(field)
     if missing:
         raise ValidationError(f"findings[{index}] missing fields: {missing}")
-    severity = str(raw["severity"]).strip()
+    severity = raw["severity"].strip()
     if severity not in VALID_SEVERITIES - {"none"}:
         raise ValidationError(f"findings[{index}].severity must be minor, major, or blocker")
     return severity
@@ -110,7 +118,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     try:
         report = validate_report_text(args.path.read_text(encoding="utf-8"), expected_kind=args.kind)
-    except (OSError, ValidationError) as exc:
+    except CLI_ERROR_TYPES as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     print(json.dumps({"ok": True, "kind": report.kind, "verdict": report.verdict}, sort_keys=True))

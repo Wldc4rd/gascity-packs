@@ -15,7 +15,6 @@ try:
 except ImportError:  # pragma: no cover
     yaml = None
 
-
 SECRET_NAMES = {
     ".env",
     ".ssh",
@@ -24,6 +23,16 @@ SECRET_NAMES = {
     ".netrc",
     "cookies.txt",
     "cookie.txt",
+}
+SECRET_DIRECTORY_NAMES = {
+    "secret",
+    "secrets",
+    "credential",
+    "credentials",
+    "token",
+    "tokens",
+    "cookie",
+    "cookies",
 }
 SECRET_PATTERNS = {
     ".env.*",
@@ -45,6 +54,10 @@ ITEM_KEYS = {"name", "path", "description"}
 
 class ValidationError(Exception):
     pass
+
+
+YAML_ERROR_TYPES = (yaml.YAMLError,) if yaml is not None else ()
+CLI_ERROR_TYPES = (OSError, UnicodeDecodeError, json.JSONDecodeError, ValidationError) + YAML_ERROR_TYPES
 
 
 @dataclass(frozen=True)
@@ -127,7 +140,7 @@ def validate_item_path(
     *,
     max_bytes: int,
 ) -> None:
-    if is_secret_path(Path(original_path), resolved):
+    if is_secret_path(Path(original_path), resolved, allowed_roots):
         raise ValidationError(
             f"{bundle_path}: {item_name} path {original_path!r} resolves to known secret location {resolved}"
         )
@@ -159,19 +172,47 @@ def path_is_relative_to(path: Path, root: Path) -> bool:
     return True
 
 
-def is_secret_path(original: Path, resolved: Path) -> bool:
-    names = {part.lower() for part in original.parts} | {part.lower() for part in resolved.parts}
+def is_secret_path(original: Path, resolved: Path, allowed_roots: list[Path] | None = None) -> bool:
+    part_sets = path_part_sets(original, allowed_roots) + path_part_sets(resolved, allowed_roots)
+    names = {part for parts in part_sets for part in parts}
     if names & SECRET_NAMES:
         return True
-    path_values = {
-        original.as_posix().lower(),
-        resolved.as_posix().lower(),
-    }
-    return any(
-        fnmatch.fnmatch(value, pattern)
-        for value in [*names, *path_values]
-        for pattern in SECRET_PATTERNS
+    if any(
+        part in SECRET_DIRECTORY_NAMES
+        for parts in part_sets
+        for part in parts[:-1]
+    ):
+        return True
+
+    path_values = set()
+    for parts in part_sets:
+        path_values.update(adjacent_paths(parts))
+        if parts:
+            path_values.add("/".join(parts))
+    leaf_patterns = {pattern for pattern in SECRET_PATTERNS if "/" not in pattern}
+    path_patterns = {pattern for pattern in SECRET_PATTERNS if "/" in pattern}
+    return any(fnmatch.fnmatch(value, pattern) for value in names for pattern in leaf_patterns) or any(
+        fnmatch.fnmatch(value, pattern) for value in path_values for pattern in path_patterns
     )
+
+
+def path_part_sets(path: Path, allowed_roots: list[Path] | None) -> list[list[str]]:
+    if not path.is_absolute() or not allowed_roots:
+        return [normalized_parts(path)]
+    for root in allowed_roots:
+        try:
+            return [normalized_parts(path.relative_to(root))]
+        except ValueError:
+            continue
+    return [normalized_parts(path)]
+
+
+def normalized_parts(path: Path) -> list[str]:
+    return [part.lower() for part in path.parts if part not in {"", path.anchor, "/", "\\"}]
+
+
+def adjacent_paths(parts: list[str]) -> set[str]:
+    return {"/".join(parts[index : index + 2]) for index in range(len(parts) - 1)}
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -186,7 +227,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     try:
         bundle = validate_bundle(args.path, allowed_roots=args.allow_root or None, max_bytes=args.max_bytes)
-    except (OSError, json.JSONDecodeError, ValidationError) as exc:
+    except CLI_ERROR_TYPES as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     print(json.dumps({"ok": True, "items": len(bundle.items)}, sort_keys=True))

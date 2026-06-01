@@ -9,6 +9,17 @@ Load context from bead metadata before investigating:
 - Required workflow root metadata keys are `gc.github.source_bead_id`,
   `gc.github.repo`, `gc.github.number`, `gc.github.body_hash`,
   `gc.github.snapshot_path`, and `gc.github.triage_dir`.
+- If workflow root metadata has `gc.github.reused_current_output=true`, do not
+  investigate or rewrite `triage-report.md`. Instead validate the reused
+  `gc.github.triage_report_path` with
+  `{{pack_root}}/assets/scripts/github_reports.py validate-triage --repo
+  <gc.github.repo> --issue-number <gc.github.number> --body-hash
+  <gc.github.body_hash>`, verify it lives under `gc.github.triage_dir`,
+  refresh `gc.github.triage_verdict`, `gc.github.triage_priority`, and
+  `gc.github.triage_recommended_next_action` from the report front matter,
+  close this step with `gc.outcome=pass`, and leave the reused artifacts
+  untouched. This is the no-op path that makes current body-hash reuse
+  effective even though the formula graph still schedules this step.
 - Read `gc.github.snapshot_path` for the issue title, body, labels, author,
   timestamps, and canonical URL. Do not refetch the issue unless the snapshot
   file is missing or invalid.

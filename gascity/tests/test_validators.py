@@ -4,6 +4,8 @@ import pathlib
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
+import io
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "assets" / "scripts"))
 
@@ -120,6 +122,87 @@ class ContextBundleValidatorTests(unittest.TestCase):
                 with self.assertRaisesRegex(context_validator.ValidationError, "secret"):
                     context_validator.validate_bundle(bundle, allowed_roots=[root])
 
+    def test_context_bundle_accepts_benign_files_under_secret_named_ancestors(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="secret-project-") as tmp:
+            root = pathlib.Path(tmp)
+            subject = root / "requirements.md"
+            subject.write_text("# Requirements\n", encoding="utf-8")
+            bundle = root / "context.yaml"
+            bundle.write_text(
+                "items:\n"
+                "  - name: Requirements\n"
+                "    path: requirements.md\n"
+                "    description: Product requirements.\n",
+                encoding="utf-8",
+            )
+
+            result = context_validator.validate_bundle(bundle, allowed_roots=[root])
+
+            self.assertEqual(result.items[0].resolved_path, subject.resolve())
+
+    def test_context_bundle_rejects_secret_named_relative_directories(self) -> None:
+        for dirname in (
+            "secrets",
+            "credentials",
+            "tokens",
+            "cookies",
+            "vault-secrets",
+            "aws-credentials",
+            "oauth-tokens",
+            "auth-cookies",
+            "id_rsa_backup",
+            "config/my-secret-store",
+        ):
+            with self.subTest(dirname=dirname), tempfile.TemporaryDirectory() as tmp:
+                root = pathlib.Path(tmp)
+                subject = root / dirname / "config.yaml"
+                subject.parent.mkdir(parents=True)
+                subject.write_text("token: value\n", encoding="utf-8")
+                bundle = root / "context.yaml"
+                bundle.write_text(
+                    "items:\n"
+                    "  - name: Secret config\n"
+                    f"    path: {dirname}/config.yaml\n"
+                    "    description: Secret material.\n",
+                    encoding="utf-8",
+                )
+
+                with self.assertRaisesRegex(context_validator.ValidationError, "secret"):
+                    context_validator.validate_bundle(bundle, allowed_roots=[root])
+
+    def test_context_bundle_rejects_symlink_to_secret_named_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            subject = root / "secrets" / "config.yaml"
+            subject.parent.mkdir()
+            subject.write_text("token: value\n", encoding="utf-8")
+            link = root / "context.md"
+            link.symlink_to(subject)
+            bundle = root / "context.yaml"
+            bundle.write_text(
+                "items:\n"
+                "  - name: Context\n"
+                "    path: context.md\n"
+                "    description: Benign-looking symlink.\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(context_validator.ValidationError, "secret"):
+                context_validator.validate_bundle(bundle, allowed_roots=[root])
+
+    def test_context_bundle_cli_reports_malformed_yaml_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = pathlib.Path(tmp) / "context.yaml"
+            bundle.write_text("items:\n  - name: [\n", encoding="utf-8")
+            stderr = io.StringIO()
+
+            with redirect_stderr(stderr), redirect_stdout(io.StringIO()):
+                code = context_validator.main([str(bundle)])
+
+            self.assertEqual(code, 1)
+            self.assertIn("error:", stderr.getvalue())
+            self.assertNotIn("Traceback", stderr.getvalue())
+
 
 class VerdictReportValidatorTests(unittest.TestCase):
     def test_verdict_report_accepts_pass_and_fail_reports(self) -> None:
@@ -192,6 +275,60 @@ findings:
 
         with self.assertRaisesRegex(verdict_validator.ValidationError, "maximum"):
             verdict_validator.validate_report_text(report)
+
+    def test_verdict_report_rejects_non_string_finding_fields(self) -> None:
+        field_values = {
+            "id": "0",
+            "severity": "0",
+            "title": "{}",
+            "evidence": "null",
+            "required_fix": "[]",
+        }
+        for field, yaml_value in field_values.items():
+            with self.subTest(field=field):
+                report = f"""---
+schema: gc.verdict-report.v1
+kind: review
+verdict: fail
+severity: major
+findings:
+  - id: rev-001
+    severity: major
+    title: Missing test
+    evidence: No test.
+    required_fix: Add one.
+    {field}: {yaml_value}
+---
+"""
+
+                with self.assertRaisesRegex(verdict_validator.ValidationError, "missing fields"):
+                    verdict_validator.validate_report_text(report)
+
+    def test_verdict_report_cli_reports_malformed_yaml_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            report = pathlib.Path(tmp) / "review.md"
+            report.write_text("---\nschema: [\n---\n", encoding="utf-8")
+            stderr = io.StringIO()
+
+            with redirect_stderr(stderr), redirect_stdout(io.StringIO()):
+                code = verdict_validator.main([str(report), "--kind", "review"])
+
+            self.assertEqual(code, 1)
+            self.assertIn("error:", stderr.getvalue())
+            self.assertNotIn("Traceback", stderr.getvalue())
+
+    def test_verdict_report_cli_reports_invalid_utf8_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            report = pathlib.Path(tmp) / "review.md"
+            report.write_bytes(b"\xff\xfe---\n")
+            stderr = io.StringIO()
+
+            with redirect_stderr(stderr), redirect_stdout(io.StringIO()):
+                code = verdict_validator.main([str(report), "--kind", "review"])
+
+            self.assertEqual(code, 1)
+            self.assertIn("error:", stderr.getvalue())
+            self.assertNotIn("Traceback", stderr.getvalue())
 
 
 if __name__ == "__main__":
