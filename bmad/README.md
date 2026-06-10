@@ -6,6 +6,8 @@ This pack implements the Gas City `build-base` workflow contract with vendored
 ## What It Provides
 
 - Formula: `bmad-build`
+- Methodology formulas: `bmad-planning`, `bmad-decomposition`,
+  `bmad-implementation`, `bmad-review`, and `bmad-fix-loop`
 - Expansion formulas: `bmad-code-review-flow`
 - Implementation item formulas: `bmad-story-development`,
   `bmad-story-development-item`
@@ -37,6 +39,43 @@ implementation and review handoffs into formulas, check loops, and fanout lanes
 so the work is durable, resumable, and visible in Gas City. When BMAD text says
 to launch a task or review subagent, read that as a request for a Gas City lane
 or expansion child.
+
+## Build-Base Mapping
+
+`bmad-build` extends `build-base` and keeps the inherited anchor order
+`prepare -> requirements -> plan -> plan-review -> decompose ->
+implement/implement-same-session -> review -> finalize -> publish`. The pack
+overrides `requirements` (PRD), `plan` (architecture), `plan-review`
+(architecture handoff review), `decompose` (epics and stories),
+`implement`/`implement-same-session` (story-development drains), and `review`
+(adversarial code-review loop); `prepare`, `finalize`, and `publish` stay
+inherited. `implementation-readiness` is the only pack-added step: it needs
+`decompose`, both implementation drains need it, and its gate is the readiness
+review run by `bmad.readiness-reviewer`, which records the readiness report
+path and outcome on the workflow root bead before implementation begins. No
+base anchor is renamed, skipped, or reordered.
+
+The native stage formulas extend the matching base methodology contracts:
+`bmad-planning` (`planning-base`), `bmad-decomposition`
+(`decomposition-base`), `bmad-implementation` (`implement`), `bmad-review`
+(`code-review-base`), and `bmad-fix-loop` (`fix-loop-base`). `bmad-build`
+pins them as its selector defaults (`planning_formula`,
+`decomposition_formula`, `implementation_formula`,
+`implementation_item_formula` `bmad-story-development-item`,
+`code_review_formula`, `review_fix_formula`) with `implementation_target`
+defaulting to `bmad.story-implementer`.
+
+Supported modes and drain policies, as declared in
+`[metadata.gc.methodology]`:
+
+- `interaction_modes`: `interactive`, `autonomous`, `headless` (inherited
+  `interaction_mode` var, default `interactive`)
+- `review_modes`: `report`, `agent`, `interactive` (inherited `review_mode`
+  var, default `agent`)
+- `implementation_strategy`: `drain` with `allowed_drain_policies` of
+  `separate` (drains `bmad-story-development` with exclusive member access)
+  and `same-session` (drains `bmad-story-development-item` in one shared
+  single-lane session with `on_item_failure = "skip_remaining"`)
 
 ## End-to-End Flow
 
