@@ -1,0 +1,30 @@
+description = """
+BMAD implementation of the planning-base methodology contract.
+"""
+formula = "bmad-planning"
+version = 1
+contract = "graph.v2"
+extends = ["planning-base"]
+target_required = false
+internal = true
+
+[[steps]]
+id = "requirements"
+title = "BMAD PRD requirements"
+needs = ["prepare-planning"]
+metadata = { "gc.run_target" = "bmad.prd-writer" }
+description_file = "../assets/workflows/bmad-planning/requirements.md"
+
+[[steps]]
+id = "plan"
+title = "BMAD architecture plan"
+needs = ["requirements"]
+metadata = { "gc.run_target" = "bmad.architect" }
+description_file = "../assets/workflows/bmad-planning/plan.md"
+
+[[steps]]
+id = "plan-review"
+title = "BMAD architecture handoff review"
+needs = ["plan"]
+metadata = { "gc.run_target" = "bmad.architect" }
+description_file = "../assets/workflows/bmad-planning/plan-review.md"

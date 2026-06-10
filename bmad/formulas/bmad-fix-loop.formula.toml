@@ -1,0 +1,22 @@
+description = """
+BMAD implementation of the fix-loop-base methodology contract.
+"""
+formula = "bmad-fix-loop"
+version = 1
+contract = "graph.v2"
+extends = ["fix-loop-base"]
+target_required = false
+internal = true
+
+[vars]
+[vars.implementation_formula]
+description = "BMAD implementation formula used for fix work."
+default = "bmad-implementation"
+
+[vars.code_review_formula]
+description = "BMAD review formula used after fixes."
+default = "bmad-review"
+
+[vars.implementation_target]
+description = "BMAD task implementation role."
+default = "bmad.story-implementer"

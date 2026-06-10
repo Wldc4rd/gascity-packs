@@ -19,12 +19,24 @@ BMAD maps naturally onto the full lifecycle base: PRD, architecture,
 epics/stories, implementation readiness, implementation, review, finalize, and
 publish.
 
+The pack-local compatibility ledger lives at
+[`bmad/REQUIREMENTS.md`](./REQUIREMENTS.md) and records the build-base
+contract proofs, including the inherited `gc` import and preserved anchor
+order.
+
 BMAD quick-dev and code-review describe sub-agent/task handoffs and parallel
 review layers. This pack converts those shapes into Gas City item formulas and
 expansion formulas with explicit implementation, self-check, acceptance-audit,
 adversarial review, synthesis, and fix lanes. The vendored skill files are
 source material only; the workflow must not invoke provider-native subagents,
 slash commands, task tools, or the upstream plugin runtime.
+
+BMAD structured steps are preserved as graph structure wherever possible. The
+pack keeps BMAD's step-file discipline as prompt guidance, but turns repeated
+implementation and review handoffs into formulas, check loops, and fanout lanes
+so the work is durable, resumable, and visible in Gas City. When BMAD text says
+to launch a task or review subagent, read that as a request for a Gas City lane
+or expansion child.
 
 ## End-to-End Flow
 
@@ -116,6 +128,11 @@ passes.
 Those post-implementation reviewer lanes are real sibling beads. The fan-in
 barrier in the diagram is documentation for the synthesizer's `needs` list, not
 a serial execution step between reviewers.
+
+For mode vocabulary, `interaction_mode` is the BMAD menu/checkpoint axis:
+interactive runs preserve halts and user choices, while headless automation
+expects all required inputs up front. `review_mode` describes whether BMAD
+review only reports findings or feeds a fix loop.
 
 ## Import It
 

@@ -1,0 +1,22 @@
+description = """
+BMAD implementation of the decomposition-base methodology contract.
+"""
+formula = "bmad-decomposition"
+version = 1
+contract = "graph.v2"
+extends = ["decomposition-base"]
+target_required = false
+internal = true
+
+[[steps]]
+id = "decompose"
+title = "BMAD epics and stories"
+metadata = { "gc.run_target" = "bmad.epic-story-decomposer" }
+description_file = "../assets/workflows/bmad-decomposition/decompose.md"
+
+[[steps]]
+id = "implementation-readiness"
+title = "BMAD implementation readiness"
+needs = ["decompose"]
+metadata = { "gc.run_target" = "bmad.readiness-reviewer" }
+description_file = "../assets/workflows/bmad-decomposition/implementation-readiness.md"
