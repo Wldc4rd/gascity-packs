@@ -1,13 +1,19 @@
 package main
 
 import (
-	"fmt"
+	"errors"
 	"maps"
 	"net/http"
 	"sort"
 	"sync"
 	"time"
 )
+
+// errPersistence marks an error that originates from the on-disk registry
+// save path (saveJSONAtomic) rather than caller input. HTTP handlers map it
+// to 500 so operators can distinguish server-side persistence failures from
+// bad requests; validation errors are left unwrapped and map to 400.
+var errPersistence = errors.New("registry persistence failure")
 
 // inboundRef remembers the last inbound message delivered to a session so
 // `reply-current` and `react` can act on "the message I just received"
@@ -50,6 +56,8 @@ type server struct {
 
 	httpClient *http.Client
 	now        func() time.Time
+
+	dedup *postDedupCache // idempotent-replay cache for outbound posts (gpk-bm3f)
 }
 
 func newServer(cfg config) (*server, error) {
@@ -61,6 +69,7 @@ func newServer(cfg config) (*server, error) {
 		lastInbound: map[string]inboundRef{},
 		httpClient:  &http.Client{},
 		now:         func() time.Time { return time.Now() },
+		dedup:       newPostDedupCache(postDedupTTL),
 	}
 	if err := s.loadRegistries(); err != nil {
 		return nil, err
@@ -119,7 +128,7 @@ func (s *server) upsertBinding(channelID, kind string, sessionIDs []string) (cha
 	s.regMu.Unlock()
 
 	if err := saveJSONAtomic(s.cfg.channelMappingsPath(), snapshot); err != nil {
-		return channelBinding{}, err
+		return channelBinding{}, errors.Join(errPersistence, err)
 	}
 	return rec, nil
 }
@@ -179,7 +188,7 @@ func (s *server) upsertIdentity(sessionID, username, iconURL, iconEmoji string) 
 	s.regMu.Unlock()
 
 	if err := saveJSONAtomic(s.cfg.identitiesPath(), snapshot); err != nil {
-		return identity{}, err
+		return identity{}, errors.Join(errPersistence, err)
 	}
 	return rec, nil
 }
@@ -200,7 +209,7 @@ func (s *server) removeIdentity(sessionID string) (bool, error) {
 	s.regMu.Unlock()
 
 	if err := saveJSONAtomic(s.cfg.identitiesPath(), snapshot); err != nil {
-		return false, err
+		return false, errors.Join(errPersistence, err)
 	}
 	return true, nil
 }
@@ -233,16 +242,17 @@ func (s *server) upsertHandleAlias(handle, sessionID string) (handleAlias, error
 	s.regMu.Unlock()
 
 	if err := saveJSONAtomic(s.cfg.handleAliasesPath(), snapshot); err != nil {
-		return handleAlias{}, err
+		return handleAlias{}, errors.Join(errPersistence, err)
 	}
 	return rec, nil
 }
 
+// removeHandleAlias deletes a handle alias. Like removeIdentity it is
+// idempotent and does not re-validate the handle: callers (the verb
+// endpoint) reject an empty handle up front, so the only error it can
+// surface is a registry write failure.
 func (s *server) removeHandleAlias(handle string) (bool, error) {
 	h := normalizeHandle(handle)
-	if h == "" {
-		return false, fmt.Errorf("handle is required")
-	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
@@ -256,7 +266,7 @@ func (s *server) removeHandleAlias(handle string) (bool, error) {
 	s.regMu.Unlock()
 
 	if err := saveJSONAtomic(s.cfg.handleAliasesPath(), snapshot); err != nil {
-		return false, err
+		return false, errors.Join(errPersistence, err)
 	}
 	return true, nil
 }

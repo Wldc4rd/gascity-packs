@@ -338,6 +338,20 @@ type config struct {
 	// is set, else /tmp/gc-slack-adapter/subteam-aliases.json. Bead
 	// gpk-hmr.2.
 	subteamAliasStorePath string
+	// userAliasStorePath is the JSON file mapping a bare gc handle
+	// (e.g. "mayor") to a raw Slack target ID — a user (Uxxxx/Wxxxx) or
+	// a User Group (Sxxxx). handlePublish uses it to rewrite outbound
+	// `@handle` body tokens into Slack mention syntax so they render as
+	// clickable, notifying mentions instead of literal text (gpk-uha7).
+	// This is the outbound inverse of subteamAliasStorePath and follows
+	// the identical read-only, SIGHUP-or-restart reload contract: the
+	// operator edits the file directly (or via a future `gc slack
+	// user-alias` command). A handle absent from the map is left
+	// literal — fail-safe, no surprise pings. Sourced from
+	// SLACK_USER_ALIAS_FILE, defaulting to
+	// <GC_CITY_PATH>/.gc/slack/slack-user-aliases.json when GC_CITY_PATH
+	// is set, else /tmp/gc-slack-adapter/slack-user-aliases.json.
+	userAliasStorePath string
 	// fileUploadRoot is the absolute filesystem prefix
 	// /publish-file is allowed to read. Empty disables /publish-file
 	// entirely (fail-closed). gc and the adapter share a filesystem,
@@ -466,6 +480,7 @@ func loadConfigFromEnv(getenv func(string) string) (config, error) {
 	defaultThreadSessionsPath := "/tmp/gc-slack-adapter/thread_sessions.json"
 	defaultRoomLaunchPath := "/tmp/gc-slack-adapter/room_launch_mappings.json"
 	defaultSubteamAliasPath := "/tmp/gc-slack-adapter/subteam-aliases.json"
+	defaultUserAliasPath := "/tmp/gc-slack-adapter/slack-user-aliases.json"
 	if cityPath := getenv("GC_CITY_PATH"); cityPath != "" {
 		defaultMappingPath = filepath.Join(cityPath, ".gc", "slack", "channel_mappings.json")
 		defaultRigMappingPath = filepath.Join(cityPath, ".gc", "slack", "rig_mappings.json")
@@ -473,6 +488,7 @@ func loadConfigFromEnv(getenv func(string) string) (config, error) {
 		defaultThreadSessionsPath = filepath.Join(cityPath, ".gc", "slack", "thread_sessions.json")
 		defaultRoomLaunchPath = filepath.Join(cityPath, ".gc", "slack", "room_launch_mappings.json")
 		defaultSubteamAliasPath = filepath.Join(cityPath, ".gc", "slack", "subteam-aliases.json")
+		defaultUserAliasPath = filepath.Join(cityPath, ".gc", "slack", "slack-user-aliases.json")
 		cfg.cityPath = cityPath
 	}
 	cfg.channelMappingPath = envOrFn("SLACK_CHANNEL_MAPPING_PATH", defaultMappingPath)
@@ -485,6 +501,7 @@ func loadConfigFromEnv(getenv func(string) string) (config, error) {
 	cfg.threadSessionsStorePath = envOrFn("GC_SLACK_THREAD_SESSIONS_FILE", defaultThreadSessionsPath)
 	cfg.roomLaunchPath = envOrFn("GC_SLACK_ROOM_LAUNCH_FILE", defaultRoomLaunchPath)
 	cfg.subteamAliasStorePath = envOrFn("SLACK_SUBTEAM_ALIAS_FILE", defaultSubteamAliasPath)
+	cfg.userAliasStorePath = envOrFn("SLACK_USER_ALIAS_FILE", defaultUserAliasPath)
 
 	// Retention controls. Defaults: keep inbound files for 7 days,
 	// sweep every hour. Setting either to "0" disables the janitor.
@@ -953,6 +970,13 @@ func main() {
 	log.Printf("subteam alias map: store=%s entries=%d (read-only; SIGHUP or restart to reload)",
 		cfg.subteamAliasStorePath, subteamAliases.Len())
 
+	userAliases, err := newUserAliasMap(cfg.userAliasStorePath)
+	if err != nil {
+		log.Fatalf("user alias map: %v", err)
+	}
+	log.Printf("user alias map: store=%s entries=%d (read-only; SIGHUP or restart to reload)",
+		cfg.userAliasStorePath, userAliases.Len())
+
 	channelMapReg, err := newChannelMappingRegistry(cfg.channelMappingPath)
 	if err != nil {
 		log.Fatalf("channel mapping registry: %v", err)
@@ -1004,7 +1028,7 @@ func main() {
 	// proxies through /svc/{name}/ (proxy_process mode), or on a
 	// 127.0.0.1 TCP listener (legacy nohup mode).
 	internalMux := http.NewServeMux()
-	internalMux.HandleFunc("/publish", handlePublish(cfg, identityReg))
+	internalMux.HandleFunc("/publish", handlePublish(cfg, identityReg, userAliases, newPublishDedupCache(publishDedupTTL)))
 	internalMux.HandleFunc("/publish-file", handlePublishFile(cfg, identityReg))
 	internalMux.HandleFunc("/react", handleReact(cfg))
 	internalMux.HandleFunc("POST /identity", handleIdentity(identityReg))
@@ -1086,7 +1110,7 @@ func main() {
 	signal.Notify(hupCh, syscall.SIGHUP)
 	defer signal.Stop(hupCh)
 	go runReloadLoop(reloadStop, hupCh, func() {
-		logReloadOutcome(appsReg, channelMapReg, rigMapReg, roomLaunchReg, subteamAliases)
+		logReloadOutcome(appsReg, channelMapReg, rigMapReg, roomLaunchReg, subteamAliases, userAliases)
 	})
 
 	stop := make(chan os.Signal, 1)
@@ -1165,7 +1189,78 @@ func registerAdapter(cfg config) error {
 	return nil
 }
 
-func handlePublish(cfg config, reg *identityRegistry) http.HandlerFunc {
+// publishDedupTTL bounds how long a delivered receipt is remembered for
+// idempotent replay. It only needs to span the retry-after-timeout window:
+// the pack's HTTP client times out at 30s and an agent retry follows shortly
+// after, so a couple of minutes comfortably covers the reported failure mode
+// (gpk-lbhl) while staying short enough that an intentional identical resend
+// minutes later is not silently swallowed.
+const publishDedupTTL = 2 * time.Minute
+
+// publishDedupCache remembers delivered publish receipts keyed by the
+// caller-supplied idempotency key, so a retry after a delivered-but-
+// timed-out POST returns the original receipt instead of posting a second
+// Slack message (gpk-lbhl). Only delivered receipts are cached: a retry
+// after a genuine (non-delivered) failure must still re-attempt delivery,
+// so failures are never remembered. An empty idempotency key disables
+// dedup for that call.
+type publishDedupCache struct {
+	mu      sync.Mutex
+	entries map[string]publishDedupEntry
+	ttl     time.Duration
+	now     func() time.Time
+}
+
+type publishDedupEntry struct {
+	receipt   publishReceipt
+	expiresAt time.Time
+}
+
+func newPublishDedupCache(ttl time.Duration) *publishDedupCache {
+	return &publishDedupCache{
+		entries: make(map[string]publishDedupEntry),
+		ttl:     ttl,
+		now:     time.Now,
+	}
+}
+
+// Get returns the cached receipt for key when one is present and unexpired.
+func (c *publishDedupCache) Get(key string) (publishReceipt, bool) {
+	if key == "" {
+		return publishReceipt{}, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.entries[key]
+	if !ok {
+		return publishReceipt{}, false
+	}
+	if !c.now().Before(e.expiresAt) {
+		delete(c.entries, key)
+		return publishReceipt{}, false
+	}
+	return e.receipt, true
+}
+
+// Put records a delivered receipt under key and sweeps expired entries so
+// the map stays bounded under churn. Empty keys and non-delivered receipts
+// are ignored.
+func (c *publishDedupCache) Put(key string, receipt publishReceipt) {
+	if key == "" || !receipt.Delivered {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := c.now()
+	c.entries[key] = publishDedupEntry{receipt: receipt, expiresAt: now.Add(c.ttl)}
+	for k, e := range c.entries {
+		if !now.Before(e.expiresAt) {
+			delete(c.entries, k)
+		}
+	}
+}
+
+func handlePublish(cfg config, reg *identityRegistry, userAliases *userAliasMap, dedup *publishDedupCache) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1204,9 +1299,14 @@ func handlePublish(cfg config, reg *identityRegistry) http.HandlerFunc {
 			return
 		}
 
+		// Rewrite outbound @handle body mentions to Slack mention syntax
+		// for handles the operator has mapped (gpk-uha7). Unmapped handles
+		// and a nil/empty map leave the text untouched, so this is a no-op
+		// for installs that haven't curated slack-user-aliases.json.
+		rewrittenText := userAliases.rewrite(req.Text)
 		post := slackPostMessageReq{
 			Channel:  req.Conversation.ConversationID,
-			Text:     req.Text,
+			Text:     rewrittenText,
 			ThreadTS: req.ReplyToMessageID,
 		}
 		identityApplied := ""
@@ -1218,9 +1318,21 @@ func handlePublish(cfg config, reg *identityRegistry) http.HandlerFunc {
 				identityApplied = rec.Username
 			}
 		}
-		log.Printf("publish: conv=%s text=%dch reply_to=%s idem=%s session=%s as=%q",
+		log.Printf("publish: conv=%s text=%dch reply_to=%s idem=%s session=%s as=%q mentions_rewritten=%t",
 			req.Conversation.ConversationID, len(req.Text), req.ReplyToMessageID,
-			req.IdempotencyKey, identitySessionID, identityApplied)
+			req.IdempotencyKey, identitySessionID, identityApplied, rewrittenText != req.Text)
+
+		// Idempotent replay: if this idempotency key already produced a
+		// delivered receipt, return it without re-posting. This is the
+		// chokepoint that absorbs a retry after a delivered-but-timed-out
+		// POST (gpk-lbhl) — the original Slack message stands, no duplicate.
+		if cached, ok := dedup.Get(req.IdempotencyKey); ok {
+			log.Printf("publish: dedup hit idem=%s conv=%s -> returning cached receipt (no re-post)",
+				req.IdempotencyKey, req.Conversation.ConversationID)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(cached)
+			return
+		}
 
 		slackResp, err := postToSlack(cfg.slackBotToken, post)
 		receipt := publishReceipt{Conversation: req.Conversation}
@@ -1246,6 +1358,10 @@ func handlePublish(cfg config, reg *identityRegistry) http.HandlerFunc {
 			receipt.Delivered = true
 			receipt.MessageID = slackResp.TS
 		}
+		// Remember delivered receipts so a subsequent retry with the same
+		// idempotency key replays this receipt instead of re-posting. Put
+		// ignores empty keys and non-delivered receipts.
+		dedup.Put(req.IdempotencyKey, receipt)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(receipt)
 	}
