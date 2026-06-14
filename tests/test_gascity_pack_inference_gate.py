@@ -376,6 +376,49 @@ printf '[{{"id":"fi-1","title":"root","status":"open"}}]\\n'
     assert args_path.read_text(encoding="utf-8").splitlines()[-3:] == ["--json", "--limit", "0"]
 
 
+def test_list_beads_falls_back_to_city_event_log_when_live_list_is_empty(tmp_path) -> None:
+    workspace = gascity_pack_inference_gate.GateWorkspace(
+        root=tmp_path,
+        city_dir=tmp_path / "city",
+        rig_dir=tmp_path / "fixture",
+        gc_home=tmp_path / "gc-home",
+        runtime_dir=tmp_path / "runtime",
+        claude_config_dir=tmp_path / "gc-home" / ".claude",
+        city_name="inference-city",
+        rig_name="fixture",
+    )
+    (workspace.city_dir / ".gc").mkdir(parents=True)
+    workspace.rig_dir.mkdir()
+    fake_gc = tmp_path / "gc"
+    fake_gc.write_text("#!/bin/sh\nprintf '[]\\n'\n", encoding="utf-8")
+    fake_gc.chmod(0o755)
+
+    event = {
+        "type": "bead.updated",
+        "payload": {
+            "bead": {
+                "id": "fi-dk42",
+                "title": "Write review report",
+                "status": "closed",
+                "metadata": {
+                    "gc.run_target": "gc.implementation-reviewer",
+                    "gc.routed_to": "fixture/gc.implementation-reviewer",
+                },
+            }
+        },
+    }
+    (workspace.city_dir / ".gc" / "events.jsonl").write_text(json.dumps(event) + "\n", encoding="utf-8")
+
+    beads = gascity_pack_inference_gate.list_beads(str(fake_gc), workspace, env={})
+
+    assert beads == [event["payload"]["bead"]]
+    gascity_pack_inference_gate.validate_required_routes(
+        beads,
+        ["gc.implementation-reviewer"],
+        context="replayed review gate",
+    )
+
+
 def test_wait_for_workflow_pass_uses_bd_show_for_closed_root(tmp_path) -> None:
     workspace = gascity_pack_inference_gate.GateWorkspace(
         root=tmp_path,

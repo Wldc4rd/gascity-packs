@@ -1399,10 +1399,19 @@ def list_beads(gc_bin: str, workspace: GateWorkspace, *, env: Mapping[str, str])
         )
         payload = extract_json_payload(output)
         if isinstance(payload, list):
-            return [item for item in payload if isinstance(item, dict)]
+            beads = [item for item in payload if isinstance(item, dict)]
+            if beads:
+                return beads
+            event_beads = list_beads_from_event_log(workspace)
+            if event_beads:
+                return event_beads
+            return beads
         if payload is not None:
             raise GateError(f"unexpected gc bd list --json payload: {payload!r}")
     except Exception:
+        event_beads = list_beads_from_event_log(workspace)
+        if event_beads:
+            return event_beads
         if not (workspace.rig_dir / ".gc" / "beads.json").exists():
             raise
 
@@ -1416,6 +1425,31 @@ def list_beads(gc_bin: str, workspace: GateWorkspace, *, env: Mapping[str, str])
     if not isinstance(beads, list):
         raise GateError(f"{path} missing beads array")
     return [item for item in beads if isinstance(item, dict)]
+
+
+def list_beads_from_event_log(workspace: GateWorkspace) -> list[dict[str, Any]]:
+    path = workspace.city_dir / ".gc" / "events.jsonl"
+    if not path.is_file():
+        return []
+
+    beads: dict[str, dict[str, Any]] = {}
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        bead = payload.get("bead")
+        if not isinstance(bead, dict):
+            continue
+        bead_id = bead.get("id")
+        if isinstance(bead_id, str) and bead_id:
+            beads[bead_id] = bead
+    return list(beads.values())
 
 
 def find_unique_bead_by_title(beads: Sequence[Mapping[str, Any]], title: str) -> Mapping[str, Any] | None:
