@@ -39,7 +39,7 @@ permissions:
   contents: read
 
 env:
-  DOLT_VERSION: "2.0.7"
+  DOLT_VERSION: "2.1.0"
   BD_VERSION: "v1.0.4"
   CLAUDE_VERSION: "2.1.123"
 
@@ -188,3 +188,4 @@ jobs:
           name: supported-pack-nightly-${{ matrix.pack }}
           path: ${{ runner.temp }}/supported-pack-nightly/${{ matrix.pack }}
           if-no-files-found: ignore
+          include-hidden-files: true
