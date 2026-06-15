@@ -3514,6 +3514,152 @@ description = "Override sink that writes the base triage report contract."
                 check=False,
             )
 
+    def _run_implementation_review_check(
+        self,
+        *,
+        show_json: str,
+        list_json: str,
+        extra_env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        script = root / "assets" / "scripts" / "checks" / "implementation-review-approved.sh"
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = pathlib.Path(td)
+            bin_dir = tmp / "bin"
+            bin_dir.mkdir()
+            show_path = tmp / "show.json"
+            list_path = tmp / "list.json"
+            show_path.write_text(show_json, encoding="utf-8")
+            list_path.write_text(list_json, encoding="utf-8")
+            fake_bd = bin_dir / "bd"
+            fake_bd.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "case \"$1\" in\n"
+                "  show) cat \"$BD_SHOW_JSON\" ;;\n"
+                "  list) cat \"$BD_LIST_JSON\" ;;\n"
+                "  *) exit 2 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            fake_bd.chmod(0o755)
+
+            env = {
+                **os.environ,
+                "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+                "BD_SHOW_JSON": str(show_path),
+                "BD_LIST_JSON": str(list_path),
+                "GC_BEAD_ID": "loop",
+                "GC_ITERATION": "1",
+                **(extra_env or {}),
+            }
+            return subprocess.run(
+                [str(script)],
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+    def test_implementation_review_check_accepts_approved_build_basic_lanes(self) -> None:
+        show_json = """[
+  {
+    "id": "loop",
+    "metadata": {
+      "gc.root_bead_id": "root",
+      "gc.step_id": "review.build-basic-review-loop",
+      "gc.step_ref": "build-basic.review.build-basic-review-loop"
+    }
+  }
+]"""
+        list_json = """[
+  {
+    "id": "acceptance",
+    "updated_at": "2026-06-15T01:00:00Z",
+    "metadata": {
+      "gc.root_bead_id": "root",
+      "gc.attempt": "1",
+      "gc.ralph_step_id": "review.build-basic-review-loop",
+      "gc.scope_ref": "review.build-basic-review-loop.iteration.1",
+      "code_review.acceptance_verdict": "approve"
+    }
+  },
+  {
+    "id": "test-evidence",
+    "updated_at": "2026-06-15T01:00:01Z",
+    "metadata": {
+      "gc.root_bead_id": "root",
+      "gc.attempt": "1",
+      "gc.ralph_step_id": "review.build-basic-review-loop",
+      "gc.scope_ref": "review.build-basic-review-loop.iteration.1",
+      "code_review.test_evidence_verdict": "approve"
+    }
+  },
+  {
+    "id": "simplicity",
+    "updated_at": "2026-06-15T01:00:02Z",
+    "metadata": {
+      "gc.root_bead_id": "root",
+      "gc.attempt": "1",
+      "gc.ralph_step_id": "review.build-basic-review-loop",
+      "gc.scope_ref": "review.build-basic-review-loop.iteration.1",
+      "code_review.simplicity_verdict": "approve"
+    }
+  }
+]"""
+
+        result = self._run_implementation_review_check(show_json=show_json, list_json=list_json)
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Implementation review approved from lane verdicts", result.stdout)
+
+    def test_implementation_review_check_rejects_incomplete_build_basic_lanes(self) -> None:
+        show_json = """[
+  {
+    "id": "loop",
+    "metadata": {
+      "gc.root_bead_id": "root",
+      "gc.step_id": "review.build-basic-review-loop"
+    }
+  }
+]"""
+        list_json = """[
+  {
+    "id": "acceptance",
+    "metadata": {
+      "gc.root_bead_id": "root",
+      "gc.attempt": "1",
+      "gc.ralph_step_id": "review.build-basic-review-loop",
+      "code_review.acceptance_verdict": "approve"
+    }
+  },
+  {
+    "id": "test-evidence",
+    "metadata": {
+      "gc.root_bead_id": "root",
+      "gc.attempt": "1",
+      "gc.ralph_step_id": "review.build-basic-review-loop",
+      "code_review.test_evidence_verdict": "iterate"
+    }
+  },
+  {
+    "id": "simplicity",
+    "metadata": {
+      "gc.root_bead_id": "root",
+      "gc.attempt": "1",
+      "gc.ralph_step_id": "review.build-basic-review-loop",
+      "code_review.simplicity_verdict": "approve"
+    }
+  }
+]"""
+
+        result = self._run_implementation_review_check(show_json=show_json, list_json=list_json)
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Implementation review needs another iteration", result.stdout)
+        self.assertIn("test_evidence=iterate", result.stdout)
+
     @staticmethod
     def _valid_requirements_artifact() -> str:
         sections = []
