@@ -34,6 +34,31 @@ on:
         description: "Optional override for every pack gate timeout, such as 90m."
         required: false
         default: ""
+      gate:
+        description: "Inference gate to run for manual subset checks."
+        required: false
+        type: choice
+        options:
+          - all
+          - review
+          - build
+          - build-basic
+          - gastown-orchestration
+        default: all
+      pack:
+        description: "Supported pack or group to exercise for manual subset checks."
+        required: false
+        type: choice
+        options:
+          - all-supported
+          - methodology
+          - gascity
+          - superpowers
+          - compound-engineering
+          - gstack
+          - bmad
+          - gastown
+        default: all-supported
 
 permissions:
   contents: read
@@ -69,6 +94,23 @@ jobs:
   inference:
     name: ${{ matrix.pack }} / ${{ matrix.gate }}
     needs: static-contracts
+    if: >-
+      ${{
+        github.event_name != 'workflow_dispatch' ||
+        (
+          (
+            github.event.inputs.pack == '' ||
+            github.event.inputs.pack == 'all-supported' ||
+            github.event.inputs.pack == matrix.pack ||
+            (github.event.inputs.pack == 'methodology' && matrix.pack != 'gastown')
+          ) &&
+          (
+            github.event.inputs.gate == '' ||
+            github.event.inputs.gate == 'all' ||
+            github.event.inputs.gate == matrix.gate
+          )
+        )
+      }}
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:

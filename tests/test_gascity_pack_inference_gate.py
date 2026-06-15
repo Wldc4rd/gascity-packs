@@ -219,6 +219,11 @@ def test_supported_pack_nightly_workflow_uses_tier_c_ollama_shape_and_pack_matri
 
     assert "name: Supported Pack Nightly" in workflow
     assert 'default: main' in workflow
+    assert "description: \"Supported pack or group to exercise for manual subset checks.\"" in workflow
+    assert "description: \"Inference gate to run for manual subset checks.\"" in workflow
+    assert "github.event_name != 'workflow_dispatch'" in workflow
+    assert "github.event.inputs.pack == matrix.pack" in workflow
+    assert "github.event.inputs.gate == matrix.gate" in workflow
     assert "max-parallel: 1" in workflow
     assert "runs-on: blacksmith-32vcpu-ubuntu-2404" in workflow
     assert "GATE_TIMEOUT: ${{ github.event.inputs.timeout || matrix.gate_timeout }}" in workflow
