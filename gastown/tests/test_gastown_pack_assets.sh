@@ -148,6 +148,25 @@ test_polecat_startup_uses_standard_hook_claim() {
         fail "polecat propulsion fragment must not regress to an unclaimed hook/work-query choice"
 }
 
+test_review_leg_contract_forbids_synthetic_mutation() {
+    local formula prompt
+    formula="$GASTOWN/formulas/mol-review-leg.toml"
+    prompt="$GASTOWN/agents/polecat/prompt.template.md"
+
+    grep -F 'Do not create synthetic/test beads' "$formula" >/dev/null ||
+        fail "review-leg formula must forbid synthetic test beads"
+    grep -F 'Do not create test beads' "$formula" >/dev/null ||
+        fail "review-leg load-assignment must forbid test bead creation"
+    grep -F 'The only allowed bead mutations are the formula-prescribed' "$formula" >/dev/null ||
+        fail "review-leg formula must define allowed mutation boundary"
+    grep -F 'Formula-specific non-implementation assignments may explicitly tell you' "$prompt" >/dev/null ||
+        fail "polecat prompt must allow formula-specific review/control close steps"
+    grep -F 'Default implementation formula: `mol-polecat-work`' "$prompt" >/dev/null ||
+        fail "polecat prompt must describe mol-polecat-work as the default implementation formula"
+    ! grep -F '**You MUST NOT close beads. EVER. No exceptions.**' "$prompt" >/dev/null ||
+        fail "polecat prompt must not globally forbid review-leg close steps"
+}
+
 test_refinery_direct_merge_is_worktree_safe_and_fail_closed() {
     local formula direct_block
     formula="$GASTOWN/formulas/mol-refinery-patrol.toml"
@@ -193,6 +212,7 @@ test_shutdown_dance_contracts_are_executable
 test_shutdown_dance_lifecycle_and_audit_contracts
 test_composition_is_documented
 test_polecat_startup_uses_standard_hook_claim
+test_review_leg_contract_forbids_synthetic_mutation
 test_refinery_direct_merge_is_worktree_safe_and_fail_closed
 
 echo "gastown pack asset tests passed"

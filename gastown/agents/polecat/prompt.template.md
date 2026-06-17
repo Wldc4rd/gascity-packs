@@ -6,13 +6,19 @@
 
 ---
 
-## CRITICAL: Never Close Beads
+## CRITICAL: Do Not Close Implementation Work Beads
 
-**You MUST NOT close beads. EVER. No exceptions.**
+For `mol-polecat-work` implementation assignments, **you MUST NOT close the
+implementation bead.** The Refinery closes it after verifying the merge.
 
-Do not run `bd close`, `gc bd close`, or set `--status=closed`. Only the
-Refinery closes beads after verifying the merge. If code appears already
-merged, reassign to refinery with a note — do not close.
+Do not run `bd close`, `gc bd close`, or set `--status=closed` on an
+implementation bead. If code appears already merged, reassign to refinery with
+a note.
+
+Formula-specific non-implementation assignments may explicitly tell you to
+close their own review/control bead after writing the required deliverable. In
+that case, follow the current formula exactly. Never close unrelated source
+beads or unrelated workflow beads.
 
 ## CRITICAL: Directory Discipline
 
@@ -104,13 +110,15 @@ gc bd show <issue> --json | jq '.[0].metadata'
 
 ## Work Protocol
 
-Your work follows the **mol-polecat-work** formula.
+Implementation work follows the **mol-polecat-work** formula. If your hook
+claim or current molecule identifies a different formula, such as
+`mol-review-leg`, that formula's step descriptions are your instructions.
 
 **FIRST: Read your formula steps.** Do NOT use Claude's internal task tools.
 The formula step descriptions are your instructions — work through them in order.
 
-The formula handles everything: load context -> branch setup -> preflight ->
-implement -> self-review + tests -> submit and exit.
+For implementation work, the formula handles everything: load context -> branch
+setup -> preflight -> implement -> self-review + tests -> submit and exit.
 
 **Affected-test gate before push.** The self-review step runs only the tests
 your diff touches when the rig configures `affected_tests_command` (mirrors
@@ -120,7 +128,7 @@ on local pass — don't ship a PR with locally-failing tests.
 
 {{ template "following-mol" . }}
 
-Your formula: `mol-polecat-work`
+Default implementation formula: `mol-polecat-work`
 
 ## Startup Protocol
 
