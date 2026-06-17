@@ -96,6 +96,13 @@ schema = 1
     hash = "sha256:4ee6d7c501d9a4a1617953c8d775523c421246b46e3eb9b653618b7900df123b"
     description = "Claim routed polecat work through gc hook on nudge."
 
+  [[pack.release]]
+    version = "0.1.8"
+    ref = "main"
+    commit = "2cd3360f36b2ff55f6c306546841963cbca1ed69"
+    hash = "sha256:b43ea3c4ad1c7075fdcc4a3a4a8d96bcf6fcf9155ead288bd50afc4c31d81561"
+    description = "Constrain review-leg assignments to analysis-only mutations and allow formula-specific review bead closeout."
+
 [[pack]]
   name = "cass"
   description = "Coding Agent Session Search prompt fragments and skill overlays for Gas City."
