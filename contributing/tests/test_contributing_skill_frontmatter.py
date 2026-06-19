@@ -30,6 +30,30 @@ class SkillFrontmatterTests(unittest.TestCase):
             self.assertRegex(body, r"(?m)^name:\s*\S+", f"{path} missing name")
             self.assertRegex(body, r"(?m)^description:\s*\S+", f"{path} missing description")
 
+    def test_frontmatter_scalars_are_yaml_safe(self) -> None:
+        # A bare ": " inside an unquoted single-line scalar makes a YAML parser
+        # read it as a nested mapping ("mapping values are not allowed here").
+        # That silently breaks GitHub's frontmatter render and any YAML-based
+        # skill loader. Quote the value or use an em-dash instead.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        for path in sorted(root.glob("skills/*/SKILL.md")):
+            text = path.read_text(encoding="utf-8")
+            match = re.match(r"\A---\n(?P<body>.*?)\n---\n", text, re.DOTALL)
+            body = match.group("body") if match else ""
+            for line in body.splitlines():
+                m = re.match(r"^(?P<key>[A-Za-z][\w-]*):[ \t](?P<value>\S.*)$", line)
+                if not m:
+                    continue
+                value = m.group("value")
+                if value[0] in "\"'|>[{":  # quoted, block, or flow collection
+                    continue
+                self.assertNotIn(
+                    ": ",
+                    value,
+                    f"{path}: front matter '{m.group('key')}' has an unquoted "
+                    f"': ' — quote the value or use an em-dash (breaks YAML).",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

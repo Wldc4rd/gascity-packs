@@ -1,6 +1,6 @@
 ---
 name: ship
-description: The pre-push self-review gate for a gastownhall/gascity PR. Runs in sequence — design-capture gate, a simplify pass, a self-review against the recurring adoption-review findings (iterate until clean), optional performance measurement, then the full check skill (mechanical gates + B1-B36 audit) — and produces a readiness report. It STOPS at the report; pushing the branch and opening the PR are your call. Self-contained: no internal hooks or tooling required. Use right before you open a PR to gastownhall/gascity.
+description: The pre-push self-review gate for a gastownhall/gascity PR. Runs in sequence — design-capture gate, a simplify pass, a self-review against the recurring adoption-review findings (iterate until clean), optional performance measurement, then the full check skill (mechanical gates + B1-B36 audit) — and produces a readiness report. It STOPS at the report; pushing the branch and opening the PR are your call. Self-contained — no internal hooks or tooling required. Use right before you open a PR to gastownhall/gascity.
 ---
 
 # Ship — Pre-Push Self-Review
@@ -107,8 +107,7 @@ now and noisy after push.
    downstream reference docs (`go run ./cmd/genschema`, `make check-docs`) and
    re-grep `docs/reference/` for the stale phrase (B26).
 
-(These are the eight-finding sweep from PR #1482 + PR #1299 — read those PRs for
-the full pattern.)
+(These are the recurring adoption-review findings that most often bounce a PR in review.)
 
 ### Stage 2b — Review loop
 
@@ -204,8 +203,8 @@ body — it shows the reviewer you did the work.
 
 ## After you open the PR — automated review
 
-`gastownhall/gascity` runs an automated reviewer (GitHub Copilot) on new PRs; it
-typically posts within a few minutes. When its comments arrive:
+`gastownhall/gascity` runs an automated reviewer on new PRs; it
+typically posts within minutes. When its comments arrive:
 
 1. Evaluate each like any reviewer — verify against the code before fixing; skip
    false positives with a one-line reason.

@@ -1,6 +1,6 @@
 ---
 name: contributing
-description: The full external-contributor lifecycle for gastownhall/gascity — write a good issue, find priority work, plan a PR, map its blast radius, run the codebase audit, and self-review before pushing. Use when someone wants to contribute to Gas City and needs to know which step they're on and which skill runs it. Self-contained: every step is a skill in this pack with Gas City's actual standards baked in — no internal tooling, no sibling pack.
+description: The full external-contributor lifecycle for gastownhall/gascity — write a good issue, find priority work, plan a PR, map its blast radius, run the codebase audit, and self-review before pushing. Use when someone wants to contribute to Gas City and needs to know which step they're on and which skill runs it. Self-contained — every step is a skill in this pack with Gas City's actual standards baked in — no internal tooling, no sibling pack.
 ---
 
 # Contributing to Gas City
