@@ -1,6 +1,6 @@
 ---
 name: find-work
-description: Find a good gastownhall/gascity issue to work on as an external contributor. Scans open issues, classifies them into actionability tiers (grab now / good candidate / investigate / skip), and — critically — detects competing PRs and maintainer-decision gates so you don't pick an issue that's already in flight or that needs a maintainer's product/design call before any PR is realistic. Self-contained: plain gh queries you run yourself, no internal tooling. Use when you want to contribute but don't have a specific bug in mind yet.
+description: Find a good gastownhall/gascity issue to work on as an external contributor. Scans open issues, classifies them into actionability tiers (grab now / good candidate / investigate / skip), and — critically — detects competing PRs and maintainer-decision gates so you don't pick an issue that's already in flight or that needs a maintainer's product/design call before any PR is realistic. Self-contained — plain gh queries you run yourself, no internal tooling. Use when you want to contribute but don't have a specific bug in mind yet.
 ---
 
 # Find Work

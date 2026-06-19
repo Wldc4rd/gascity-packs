@@ -1,6 +1,6 @@
 ---
 name: ship
-description: The pre-push self-review gate for a gastownhall/gascity PR. Runs in sequence — design-capture gate, a simplify pass, a self-review against the recurring adoption-review findings (iterate until clean), optional performance measurement, then the full check skill (mechanical gates + B1-B36 audit) — and produces a readiness report. It STOPS at the report; pushing the branch and opening the PR are your call. Self-contained: no internal hooks or tooling required. Use right before you open a PR to gastownhall/gascity.
+description: The pre-push self-review gate for a gastownhall/gascity PR. Runs in sequence — design-capture gate, a simplify pass, a self-review against the recurring adoption-review findings (iterate until clean), optional performance measurement, then the full check skill (mechanical gates + B1-B36 audit) — and produces a readiness report. It STOPS at the report; pushing the branch and opening the PR are your call. Self-contained — no internal hooks or tooling required. Use right before you open a PR to gastownhall/gascity.
 ---
 
 # Ship — Pre-Push Self-Review
